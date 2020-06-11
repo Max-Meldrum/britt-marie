@@ -1,8 +1,11 @@
-mod table;
+pub mod art;
 
-use table::RawTable;
+use art::ART;
 
 // TODO
-pub struct BrittMarie<T> {
-    table: RawTable<T>,
+pub struct BrittMarie<K, V>
+where
+    K: AsRef<[u8]>,
+{
+    art: ART<K, V>,
 }
