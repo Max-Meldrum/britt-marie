@@ -7,6 +7,8 @@ edition = "2018"
 [dependencies]
 fxhash = "0.2.1"
 cfg-if = "0.1.10"
+packed_simd = "0.3.3"
+
 
 [dev-dependencies]
 criterion = { version = "0.3", features = ['real_blackbox'] }
@@ -14,5 +16,9 @@ rand = "0.7.3"
 
 [[bench]]
 name = "ops"
+harness = false
+
+[[bench]]
+name = "search"
 harness = false
 
