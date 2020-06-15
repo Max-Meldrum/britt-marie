@@ -5,13 +5,14 @@ authors = ["Max Meldrum <max@meldrum.se>"]
 edition = "2018"
 
 [dependencies]
+bloom-filter-rs = "0.1.0"
 fxhash = "0.2.1"
 cfg-if = "0.1.10"
 packed_simd = "0.3.3"
 
-
 [dev-dependencies]
 criterion = { version = "0.3", features = ['real_blackbox'] }
+once_cell = "1.3.1"
 rand = "0.7.3"
 
 [[bench]]
@@ -22,3 +23,6 @@ harness = false
 name = "search"
 harness = false
 
+[[bench]]
+name = "simd_ops"
+harness = false

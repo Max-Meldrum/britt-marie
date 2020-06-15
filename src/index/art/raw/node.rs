@@ -7,13 +7,11 @@ const NODE_TYPE_256: u8 = 3;
 
 const MAX_PREFIX_LENGTH: usize = 9;
 
-pub enum Node<K, V> {
+pub enum Node<V> {
     Nil,
-    Node4(Box<Node4<K, V>>),
-    Node16(Box<Node16<K, V>>),
-    Node48(Box<Node48<K, V>>),
-    Node256(Box<Node256<K, V>>),
-    Leaf(K, V),
+    Node4(Box<Node4<V>>),
+    Node16(Box<Node16<V>>),
+    Leaf(V),
 }
 
 pub struct NodeInfo {
@@ -32,13 +30,13 @@ impl NodeInfo {
     }
 }
 
-pub struct Node4<K, V> {
+pub struct Node4<V> {
     info: NodeInfo,
     keys: [u8; 4],
-    children: [Node<K, V>; 4],
+    children: [Node<V>; 4],
 }
 
-impl<K, V> Node4<K, V> {
+impl<V> Node4<V> {
     pub fn new() -> Self {
         Self {
             info: NodeInfo::new(),
@@ -48,13 +46,13 @@ impl<K, V> Node4<K, V> {
     }
 }
 
-pub struct Node16<K, V> {
+pub struct Node16<V> {
     info: NodeInfo,
     keys: [u8; 16],
-    children: [Node<K, V>; 16],
+    children: [Node<V>; 16],
 }
 
-impl<K, V> Node16<K, V> {
+impl<V> Node16<V> {
     pub fn new() -> Self {
         Self {
             info: NodeInfo::new(),
@@ -64,13 +62,13 @@ impl<K, V> Node16<K, V> {
     }
 }
 
-pub struct Node48<K, V> {
+pub struct Node48<V> {
     info: NodeInfo,
     child_index: [u8; 256],
-    children: [Node<K, V>; 48],
+    children: [Node<V>; 48],
 }
 
-impl<K, V> Node48<K, V> {
+impl<V> Node48<V> {
     pub fn new() -> Self {
         Self {
             info: NodeInfo::new(),
@@ -80,12 +78,12 @@ impl<K, V> Node48<K, V> {
     }
 }
 
-pub struct Node256<K, V> {
+pub struct Node256<V> {
     info: NodeInfo,
-    children: [Node<K, V>; 256],
+    children: [Node<V>; 256],
 }
 
-impl<K, V> Node256<K, V> {
+impl<V> Node256<V> {
     pub fn new() -> Self {
         Self {
             info: NodeInfo::new(),
@@ -94,12 +92,12 @@ impl<K, V> Node256<K, V> {
     }
 }
 
-pub trait NodeOps<K, V> {
-    fn add_child(&mut self, node: Node<K, V>, byte: u8);
+pub trait NodeOps<V> {
+    fn add_child(&mut self, node: Node<V>, byte: u8);
 }
 
-impl<K, V> NodeOps<K, V> for Node4<K, V> where K: AsRef<[u8]> {
-    fn add_child(&mut self, node: Node<K, V>, byte: u8) {
+impl<V> NodeOps<V> for Node4<V> {
+    fn add_child(&mut self, node: Node<V>, byte: u8) {
         let id = self.info.count;
     }
 }

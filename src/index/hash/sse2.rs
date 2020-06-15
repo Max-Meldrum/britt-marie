@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 use super::bitmask::BitMask;
-use super::EMPTY;
+use super::table::EMPTY;
 use core::mem;
 
 #[cfg(target_arch = "x86")]

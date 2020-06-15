@@ -1,5 +1,6 @@
 use criterion::{criterion_group, criterion_main, Bencher, Criterion, Throughput};
 use fxhash::FxHashMap;
+use once_cell::sync::Lazy;
 use rand::Rng;
 use std::collections::BTreeMap;
 use std::{
@@ -9,8 +10,17 @@ use std::{
 
 const INSERT_COUNT: u64 = 1000;
 
+static RANDOM_INDEXES: Lazy<Vec<u64>> = Lazy::new(|| {
+    let mut rng = rand::thread_rng();
+    let mut indexes = Vec::with_capacity(INSERT_COUNT as usize);
+    for _i in 0..INSERT_COUNT {
+        indexes.push(rng.gen_range(0, INSERT_COUNT));
+    }
+    indexes
+});
+
 fn insert(c: &mut Criterion) {
-    let mut group = c.benchmark_group("hash");
+    let mut group = c.benchmark_group("insert");
     group.throughput(Throughput::Elements(INSERT_COUNT));
     group.bench_function("random range insert hash", random_range_insert_hash);
     group.bench_function("random range insert btreemap", random_range_insert_btreemap);
@@ -19,7 +29,7 @@ fn insert(c: &mut Criterion) {
     group.bench_function("ordered insert btreemap", ordered_insert_btreemap);
 
     group.bench_function("ordered rmw hash", rmw_ordered_hash);
-    group.bench_function("random rmw hash", rmw_ordered_hash);
+    group.bench_function("random rmw hash", rmw_random_hash);
 
     group.bench_function("ordered rmw btreemap", rmw_ordered_btreemap);
     group.bench_function("random rmw btreemap", rmw_random_btreemap);
@@ -28,10 +38,8 @@ fn insert(c: &mut Criterion) {
 
 fn random_range_insert_hash(b: &mut Bencher) {
     let mut hash_map = FxHashMap::default();
-    let mut rng = rand::thread_rng();
     b.iter(|| {
-        for _i in 0..INSERT_COUNT {
-            let id = rng.gen_range(0, 10000);
+        for id in RANDOM_INDEXES.iter() {
             hash_map.insert(id, 1000);
         }
     });
@@ -62,13 +70,11 @@ fn rmw_ordered_hash(b: &mut Bencher) {
 
 fn rmw_random_hash(b: &mut Bencher) {
     let mut hash_map = FxHashMap::default();
-    let mut rng = rand::thread_rng();
     for i in 0..INSERT_COUNT {
         hash_map.insert(i, 1000);
     }
     b.iter(|| {
-        for i in 0..INSERT_COUNT {
-            let id = rng.gen_range(0, INSERT_COUNT);
+        for id in RANDOM_INDEXES.iter() {
             if let Some(val) = hash_map.get_mut(&id) {
                 *val += 10;
             }
@@ -78,10 +84,8 @@ fn rmw_random_hash(b: &mut Bencher) {
 
 fn random_range_insert_btreemap(b: &mut Bencher) {
     let mut map = BTreeMap::new();
-    let mut rng = rand::thread_rng();
     b.iter(|| {
-        for _i in 0..INSERT_COUNT {
-            let id = rng.gen_range(0, 10000);
+        for id in RANDOM_INDEXES.iter() {
             map.insert(id, 1000);
         }
     });
@@ -112,13 +116,11 @@ fn rmw_ordered_btreemap(b: &mut Bencher) {
 
 fn rmw_random_btreemap(b: &mut Bencher) {
     let mut map = BTreeMap::new();
-    let mut rng = rand::thread_rng();
     for i in 0..INSERT_COUNT {
         map.insert(i, 1000);
     }
     b.iter(|| {
-        for _i in 0..INSERT_COUNT {
-            let id = rng.gen_range(0, INSERT_COUNT);
+        for id in RANDOM_INDEXES.iter() {
             if let Some(val) = map.get_mut(&id) {
                 *val += 10;
             }
