@@ -1,4 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Bencher, Criterion};
+#[cfg(feature = "nightly")]
 use packed_simd::u32x16;
 
 const VALUES: [u32; 16] = [
@@ -9,6 +10,7 @@ const VALUES: [u32; 16] = [
 fn sum(c: &mut Criterion) {
     let mut group = c.benchmark_group("sum");
     group.bench_function("normal sum", normal_sum);
+    #[cfg(feature = "nightly")]
     group.bench_function("simd sum", simd_sum);
 }
 
@@ -22,6 +24,7 @@ fn normal_sum(b: &mut Bencher) {
     });
 }
 
+#[cfg(feature = "nightly")]
 fn simd_sum(b: &mut Bencher) {
     b.iter(|| {
         let arr = u32x16::from_slice_unaligned(&black_box(VALUES));

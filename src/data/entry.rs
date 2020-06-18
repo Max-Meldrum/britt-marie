@@ -1,22 +1,9 @@
 use super::Value;
 
 /// Type alias for a cache evicted entry
-pub type EvictedEntry<T> = Entry<T>;
+pub type EvictedEntry<T> = LazyEntry<T>;
 
-/// BrittMarie Entry types
-pub enum Entry<V>
-where
-    V: Value,
-{
-    /// Lazily Serialised Entry Type
-    Lazy(LazyEntry<V>),
-    /// Raw Entry type
-    ///
-    /// May be used to eagerily serialise the entry or store other
-    /// values than type `V`
-    Raw(RawEntry),
-}
-
+/// Lazily Serialised Entry Type
 pub struct LazyEntry<V>
 where
     V: Value,

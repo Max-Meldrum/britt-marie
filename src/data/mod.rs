@@ -2,7 +2,7 @@ use std::fmt::Debug;
 
 pub mod entry;
 
-pub(crate) use entry::{Entry, LazyEntry, RawEntry};
+pub(crate) use entry::{LazyEntry, EvictedEntry, RawEntry};
 
 pub trait Serialisable: Send + Debug {
     fn serialise(&self) -> Vec<u8>;

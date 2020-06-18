@@ -4,7 +4,7 @@ use criterion::{criterion_group, criterion_main, Bencher, BenchmarkId, Criterion
 use core::arch::x86;
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64 as x86;
-
+#[cfg(feature = "nightly")]
 use packed_simd::u8x16;
 
 const TARGET_ARR: [u8; 16] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
@@ -21,6 +21,7 @@ fn search(c: &mut Criterion) {
         });
 
         #[cfg(all(
+            feature = "nightly",
             target_feature = "sse2",
             any(target_arch = "x86", target_arch = "x86_64"),
         ))]
@@ -73,11 +74,17 @@ fn binsearch<T: PartialOrd>(target: &T, collection: &[T]) -> Option<usize> {
     return None;
 }
 
+#[cfg(all(
+    feature = "nightly",
+    target_feature = "sse2",
+    any(target_arch = "x86", target_arch = "x86_64"),
+))]
 fn linear_search_simd(b: &mut Bencher, key: &u8, pos: usize) {
     b.iter(|| assert_eq!(Some(pos), lin_simd(&TARGET_ARR, *key)));
 }
 
 #[cfg(all(
+    feature = "nightly",
     target_feature = "sse2",
     any(target_arch = "x86", target_arch = "x86_64"),
 ))]

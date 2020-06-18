@@ -7,7 +7,8 @@
 use std::borrow::Borrow;
 use std::hash::{BuildHasher, Hash, Hasher};
 
-use crate::data::{Entry, Key, LazyEntry, Value};
+use crate::data::{EvictedEntry, Key, LazyEntry, Value};
+use crate::index::RandomOps;
 
 cfg_if::cfg_if! {
     // Use the SSE2 implementation if possible: it allows us to scan 16 buckets
@@ -38,18 +39,26 @@ mod table;
 use self::bitmask::BitMask;
 use self::imp::Group;
 use self::table::RawTable;
+use crate::config::IndexConfig;
+use crate::storage::RawStore;
+use std::rc::Rc;
 
 // Set FxHash to default as most keys tend to be small
 pub type DefaultHashBuilder = fxhash::FxBuildHasher;
 
-pub struct HashTable<K, V>
+pub struct HashIndex<K, V>
 where
     K: Key,
     V: Value,
 {
+    /// Hasher for the keys
     pub(crate) hash_builder: fxhash::FxBuildHasher,
-    pub(crate) table: RawTable<(K, Entry<V>)>,
-    // cache? lru/tinylfu
+    /// HashBrown's RawTable impl
+    pub(crate) table: RawTable<(K, LazyEntry<V>)>,
+    /// Index Configuration
+    index_config: IndexConfig,
+    /// The backend layer where things are persisted
+    backend: Rc<RawStore>,
 }
 
 #[inline]
@@ -59,21 +68,23 @@ pub(crate) fn make_hash<K: Hash + ?Sized>(hash_builder: &impl BuildHasher, val: 
     state.finish()
 }
 
-impl<K, V> HashTable<K, V>
+impl<K, V> HashIndex<K, V>
 where
     K: Key + Eq + Hash,
     V: Value,
 {
     #[inline]
-    pub fn with_capacity(capacity: usize) -> Self {
+    pub fn new(capacity: usize, backend: Rc<RawStore>) -> Self {
         Self {
             hash_builder: DefaultHashBuilder::default(),
             table: RawTable::with_capacity(capacity),
+            index_config: IndexConfig::default(),
+            backend,
         }
     }
 
     #[inline]
-    pub fn insert(&mut self, k: K, v: Entry<V>) -> Option<Entry<V>> {
+    fn insert(&mut self, k: K, v: LazyEntry<V>) -> Option<LazyEntry<V>> {
         unsafe {
             let hash = make_hash(&self.hash_builder, &k);
             if let Some(item) = self.table.find(hash, |x| k.eq(&x.0)) {
@@ -88,7 +99,7 @@ where
     }
 
     #[inline]
-    pub fn get<Q: ?Sized>(&self, k: &Q) -> Option<&Entry<V>>
+    fn get<Q: ?Sized>(&self, k: &Q) -> Option<&LazyEntry<V>>
     where
         K: Borrow<Q>,
         Q: Hash + Eq,
@@ -97,7 +108,7 @@ where
     }
 
     #[inline]
-    pub fn get_mut<Q: ?Sized>(&mut self, k: &Q) -> Option<&mut Entry<V>>
+    fn get_mut<Q: ?Sized>(&mut self, k: &Q) -> Option<&mut LazyEntry<V>>
     where
         K: Borrow<Q>,
         Q: Hash + Eq,
@@ -109,7 +120,7 @@ where
     }
 
     #[inline]
-    pub fn get_key_value<Q: ?Sized>(&self, k: &Q) -> Option<(&K, &Entry<V>)>
+    fn get_key_value<Q: ?Sized>(&self, k: &Q) -> Option<(&K, &LazyEntry<V>)>
     where
         K: Borrow<Q>,
         Q: Hash + Eq,
@@ -134,5 +145,31 @@ where
     #[inline]
     pub fn capacity(&self) -> usize {
         self.table.capacity()
+    }
+}
+
+impl<K, V> RandomOps<K, V> for HashIndex<K, V>
+where
+    K: Key + Eq + Hash,
+    V: Value,
+{
+    #[inline(always)]
+    fn get(&self, key: &K) -> Option<&V> {
+        None
+    }
+    #[inline(always)]
+    fn put(&mut self, key: &K, value: V) {
+        unimplemented!();
+    }
+
+    #[inline(always)]
+    fn rmw<F: Sized>(&mut self, key: &K, f: F)
+    where
+        F: FnMut(&mut V),
+    {
+        if let Some(entry) = self.get_mut(key) {
+            //f(&mut entry.value)
+        } else {
+        }
     }
 }

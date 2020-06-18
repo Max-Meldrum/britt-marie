@@ -12,6 +12,7 @@ use std::alloc::{alloc, dealloc, handle_alloc_error};
 
 use crate::index::hash::bitmask::BitMask;
 use crate::index::hash::imp::Group;
+use crate::hint::{unlikely, likely};
 
 
 /// Augments `AllocErr` with a `CapacityOverflow` variant.
@@ -25,21 +26,6 @@ pub enum CollectionAllocErr {
         /// The layout of the allocation request that failed.
         layout: Layout,
     },
-}
-
-// Branch prediction hint. This is currently only available on nightly but it
-// consistently improves performance by 10-15%.
-#[cfg(feature = "nightly")]
-use core::intrinsics::{likely, unlikely};
-#[cfg(not(feature = "nightly"))]
-#[inline]
-fn likely(b: bool) -> bool {
-    b
-}
-#[cfg(not(feature = "nightly"))]
-#[inline]
-fn unlikely(b: bool) -> bool {
-    b
 }
 
 #[cfg(feature = "nightly")]
