@@ -1,4 +1,5 @@
 /// Write Modes that BrittMarie provide
+#[derive(PartialEq)]
 pub enum WriteMode {
     /// No-Copy-on-Write
     ///
@@ -20,5 +21,11 @@ impl Default for WriteMode {
 #[derive(Default)]
 pub struct IndexConfig {
     write_mode: WriteMode,
-    // cache_policy
+}
+
+impl IndexConfig {
+    #[inline(always)]
+    pub fn is_cow(&self) -> bool {
+        self.write_mode == WriteMode::Cow
+    }
 }

@@ -10,10 +10,9 @@ use core::mem::ManuallyDrop;
 use core::ptr::NonNull;
 use std::alloc::{alloc, dealloc, handle_alloc_error};
 
+use crate::hint::{likely, unlikely};
 use crate::index::hash::bitmask::BitMask;
 use crate::index::hash::imp::Group;
-use crate::hint::{unlikely, likely};
-
 
 /// Augments `AllocErr` with a `CapacityOverflow` variant.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -71,6 +70,9 @@ pub(crate) const EMPTY: u8 = 0b1111_1111;
 
 /// Control byte value for a deleted bucket.
 const DELETED: u8 = 0b1000_0000;
+
+/// Control byte value for a modified bucket
+pub(crate) const MODIFIED: u8 = 0b0000_0001;
 
 /// Checks whether a control byte represents a full bucket (top bit is clear).
 #[inline]
@@ -583,6 +585,8 @@ impl<T> RawTable<T> {
             let old_ctrl = *self.ctrl(index);
             if unlikely(self.growth_left == 0 && special_is_empty(old_ctrl)) {
                 // TODO
+                // We are full...
+                // Find index to evict
                 //self.reserve(1, hasher);
                 index = self.find_insert_slot(hash);
             }
@@ -632,6 +636,12 @@ impl<T> RawTable<T> {
     #[inline]
     pub fn len(&self) -> usize {
         self.items
+    }
+
+    /// Returns whether the table is full or not
+    #[inline]
+    pub fn is_full(&self) -> bool {
+        self.growth_left == 0
     }
 
     /// Returns the number of buckets in the table.

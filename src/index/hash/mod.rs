@@ -8,7 +8,7 @@ use std::borrow::Borrow;
 use std::hash::{BuildHasher, Hash, Hasher};
 
 use crate::data::{EvictedEntry, Key, LazyEntry, Value};
-use crate::index::RandomOps;
+use crate::index::{HashOps, IndexOps};
 
 cfg_if::cfg_if! {
     // Use the SSE2 implementation if possible: it allows us to scan 16 buckets
@@ -40,11 +40,19 @@ use self::bitmask::BitMask;
 use self::imp::Group;
 use self::table::RawTable;
 use crate::config::IndexConfig;
-use crate::storage::RawStore;
+use crate::raw_store::RawStore;
+use lru::LruCache;
+use std::cell::{RefCell, UnsafeCell};
 use std::rc::Rc;
 
 // Set FxHash to default as most keys tend to be small
 pub type DefaultHashBuilder = fxhash::FxBuildHasher;
+
+macro_rules! raw_table {
+    ($sel:ident) => {
+        unsafe { &mut *$sel.raw_table.get() }
+    };
+}
 
 pub struct HashIndex<K, V>
 where
@@ -54,11 +62,11 @@ where
     /// Hasher for the keys
     pub(crate) hash_builder: fxhash::FxBuildHasher,
     /// HashBrown's RawTable impl
-    pub(crate) table: RawTable<(K, LazyEntry<V>)>,
+    pub(crate) raw_table: UnsafeCell<RawTable<(K, V)>>,
     /// Index Configuration
     index_config: IndexConfig,
-    /// The backend layer where things are persisted
-    backend: Rc<RawStore>,
+    /// The RawStore layer where things are persisted
+    raw_store: Rc<RefCell<RawStore>>,
 }
 
 #[inline]
@@ -74,32 +82,37 @@ where
     V: Value,
 {
     #[inline]
-    pub fn new(capacity: usize, backend: Rc<RawStore>) -> Self {
+    pub fn new(capacity: usize, raw_store: Rc<RefCell<RawStore>>) -> Self {
         Self {
             hash_builder: DefaultHashBuilder::default(),
-            table: RawTable::with_capacity(capacity),
+            raw_table: UnsafeCell::new(RawTable::with_capacity(capacity)),
             index_config: IndexConfig::default(),
-            backend,
+            raw_store,
         }
     }
 
     #[inline]
-    fn insert(&mut self, k: K, v: LazyEntry<V>) -> Option<LazyEntry<V>> {
+    fn insert(&self, k: K, v: V) -> Option<V> {
+        let hash = make_hash(&self.hash_builder, &k);
+        let mut table = raw_table!(self);
         unsafe {
-            let hash = make_hash(&self.hash_builder, &k);
-            if let Some(item) = self.table.find(hash, |x| k.eq(&x.0)) {
+            if let Some(item) = (*table).find(hash, |x| k.eq(&x.0)) {
                 Some(std::mem::replace(&mut item.as_mut().1, v))
             } else {
-                let hash_builder = &self.hash_builder;
-                self.table
-                    .insert(hash, (k, v), |x| make_hash(hash_builder, &x.0));
-                None
+                if (*table).is_full() {
+                    //let evicted_index = self.cache.pop_lru();
+                    None
+                } else {
+                    let hash_builder = &self.hash_builder;
+                    (*table).insert(hash, (k, v), |x| make_hash(hash_builder, &x.0));
+                    None
+                }
             }
         }
     }
 
     #[inline]
-    fn get<Q: ?Sized>(&self, k: &Q) -> Option<&LazyEntry<V>>
+    fn table_get<Q: ?Sized>(&self, k: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
         Q: Hash + Eq,
@@ -108,68 +121,140 @@ where
     }
 
     #[inline]
-    fn get_mut<Q: ?Sized>(&mut self, k: &Q) -> Option<&mut LazyEntry<V>>
+    fn table_get_mut<Q: ?Sized>(&mut self, k: &Q) -> Option<&mut V>
     where
         K: Borrow<Q>,
         Q: Hash + Eq,
     {
         let hash = make_hash(&self.hash_builder, k);
-        self.table
+        let table = raw_table!(self);
+        table
             .find(hash, |x| k.eq(x.0.borrow()))
             .map(|item| unsafe { &mut item.as_mut().1 })
     }
 
     #[inline]
-    fn get_key_value<Q: ?Sized>(&self, k: &Q) -> Option<(&K, &LazyEntry<V>)>
+    fn get_key_value<Q: ?Sized>(&self, k: &Q) -> Option<(&K, &V)>
     where
         K: Borrow<Q>,
         Q: Hash + Eq,
     {
         let hash = make_hash(&self.hash_builder, k);
-        self.table
-            .find(hash, |x| k.eq(x.0.borrow()))
-            .map(|item| unsafe {
-                let &(ref key, ref value) = item.as_ref();
-                (key, value)
-            })
+        let table = raw_table!(self);
+        table.find(hash, |x| k.eq(x.0.borrow())).map(|item| unsafe {
+            let &(ref key, ref value) = item.as_ref();
+            (key, value)
+        })
     }
 
     #[inline]
     pub fn len(&self) -> usize {
-        self.table.len()
+        raw_table!(self).len()
     }
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        raw_table!(self).len() == 0
     }
     #[inline]
     pub fn capacity(&self) -> usize {
-        self.table.capacity()
+        raw_table!(self).capacity()
     }
 }
 
-impl<K, V> RandomOps<K, V> for HashIndex<K, V>
+impl<K, V> IndexOps for HashIndex<K, V>
+where
+    K: Key + Eq + Hash,
+    V: Value,
+{
+    fn persist(&self) {
+        // ModifiedIterator
+        // LRU hashmap
+        //
+        // TODO: Iterate over all buckets that have Modified CTRL byte
+        // and move them into self.raw_store.store_batch();
+    }
+}
+
+impl<K, V> HashOps<K, V> for HashIndex<K, V>
 where
     K: Key + Eq + Hash,
     V: Value,
 {
     #[inline(always)]
     fn get(&self, key: &K) -> Option<&V> {
-        None
+        let entry = self.table_get(key);
+
+        // Return early if we have a match on our RawTable
+        if entry.is_some() {
+            return entry;
+        }
+
+        // Attempt to find the value in the RawStore
+        if let Some(v) = self.raw_store.borrow_mut().fetch::<K, V>(key) {
+            // Insert the value back into the index
+            let _ = self.insert(key.clone(), v);
+            // Kinda silly but run table_get again to get the referenced value.
+            // Cannot return a referenced value created in the function itself...
+            self.table_get(key)
+        } else {
+            // The key does not exist
+            return None;
+        }
     }
     #[inline(always)]
-    fn put(&mut self, key: &K, value: V) {
-        unimplemented!();
+    fn put(&mut self, key: K, value: V) {
+        let _ = self.insert(key, value);
     }
 
     #[inline(always)]
-    fn rmw<F: Sized>(&mut self, key: &K, f: F)
+    fn rmw<F: Sized>(&mut self, key: &K, mut f: F) -> bool
     where
         F: FnMut(&mut V),
     {
-        if let Some(entry) = self.get_mut(key) {
-            //f(&mut entry.value)
-        } else {
+        if let Some(mut entry) = self.table_get_mut(key) {
+            f(&mut entry);
+            // indicate that the operation was successful
+            return true;
         }
+
+        // Attempt to find the value in the RawStore
+        if let Some(mut value) = self.raw_store.borrow_mut().fetch::<K, V>(key) {
+            // run the rmw op on the value
+            f(&mut value);
+            // insert the value into the RawTable
+            let _ = self.insert(key.clone(), value);
+            // indicate that the operation was successful
+            return true;
+        }
+
+        // return false as the rmw operation did not modify the given key
+        return false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn basic_test() {
+        let raw_store = Rc::new(RefCell::new(RawStore::new("/tmp/hash")));
+        let mut hash_index: HashIndex<u64, u64> = HashIndex::new(128, raw_store);
+        hash_index.put(1, 10);
+        assert_eq!(hash_index.get(&1), Some(&10));
+        assert_eq!(hash_index.get(&5), None);
+        assert_eq!(
+            hash_index.rmw(&1, |v| {
+                *v += 5;
+            }),
+            true
+        );
+        assert_eq!(hash_index.get(&1), Some(&15));
+        assert_eq!(
+            hash_index.rmw(&5, |v| {
+                *v += 5;
+            }),
+            false
+        );
     }
 }

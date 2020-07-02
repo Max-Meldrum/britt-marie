@@ -11,12 +11,14 @@
     )
 )]
 
+/// Index Config
 pub mod config;
+/// Available Lazy State Indexes
 pub mod index;
+/// Backing Stores
+pub mod raw_store;
 
-mod cache;
 /// Data types used by the crate
 mod data;
 /// Set of compiler hints
 mod hint;
-mod storage;

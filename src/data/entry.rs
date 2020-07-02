@@ -8,7 +8,7 @@ pub struct LazyEntry<V>
 where
     V: Value,
 {
-    value: V,
+    pub value: V,
     meta: Metadata,
 }
 
@@ -31,6 +31,7 @@ where
     pub fn update_version(&mut self, version: u64) {
         self.meta.version = version;
     }
+    /*
     #[inline]
     pub fn into_raw(self) -> RawEntry {
         RawEntry {
@@ -38,6 +39,7 @@ where
             meta: self.meta,
         }
     }
+    */
 }
 
 pub struct RawEntry {
