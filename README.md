@@ -1,6 +1,6 @@
 # Britt-Marie
 
-Britt-Marie is an embedded key-value store for Streaming systems.
+Britt-Marie is a special purpose storage solution for streaming processing systems
 
 
 ## Goals

@@ -1,3 +1,20 @@
+//! Britt-Marie is a special purpose storage solution for streaming processing systems
+//!
+//! Britt-Marie offers a set of lazy indexes that are backed by a durable state backend. The
+//! implementations are by default lazy, however, it is possible to enable COW (Copy on Write) for individual
+//! indexes.
+//!
+//!
+//!```text
+//!     ValueIndex   HashIndex   ValueIndex
+//!          \           |           /
+//!           \          |          /
+//!            \         |         /
+//!             \        |        /
+//!              \       |       /
+//!             [----RawStore----]
+//!```
+
 #![cfg_attr(
     feature = "nightly",
     feature(
@@ -11,14 +28,25 @@
     )
 )]
 
-/// Index Config
-pub mod config;
-/// Available Lazy State Indexes
-pub mod index;
-/// Backing Stores
-pub mod raw_store;
-
-/// Data types used by the crate
+/// BrittMarie Data types
 mod data;
+/// Error types
+mod error;
 /// Set of compiler hints
 mod hint;
+/// Available Indexes
+mod index;
+/// Backing Stores
+mod raw_store;
+
+pub use crate::error::BrittMarieError;
+pub use crate::index::{
+    hash::HashIndex, value::ValueIndex, HashOps, IndexOps, OrderedOps, ValueOps,
+};
+pub use crate::raw_store::RawStore;
+
+#[cfg(feature = "britt-marie-derive")]
+extern crate britt_marie_derive;
+#[cfg(feature = "britt-marie-derive")]
+#[doc(hidden)]
+pub use britt_marie_derive::*;

@@ -1,4 +1,5 @@
-use anyhow::{Context, Result};
+use crate::data::{Key, Value};
+use crate::error::*;
 use rocksdb::{
     checkpoint::Checkpoint, ColumnFamily, ColumnFamilyDescriptor, DBPinnableSlice, Options,
     SliceTransform, WriteBatch, WriteOptions, DB,
@@ -8,8 +9,17 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[inline(always)]
+fn default_write_opts() -> WriteOptions {
+    let mut res = WriteOptions::default();
+    res.disable_wal(true);
+    res
+}
+
+/// Backend using RocksDB as its backing store
 pub struct Backend {
     db: DB,
+    write_opts: WriteOptions,
     path: PathBuf,
 }
 
@@ -20,7 +30,11 @@ impl Backend {
             fs::create_dir_all(&path).unwrap();
         }
         let db = DB::open_default(path.clone()).unwrap();
-        Backend { db, path }
+        Backend {
+            db,
+            write_opts: default_write_opts(),
+            path,
+        }
     }
 
     #[inline(always)]
@@ -30,11 +44,36 @@ impl Backend {
         V: AsRef<[u8]>,
     {
         self.db
-            .put(key.as_ref(), value.as_ref())
-            .with_context(|| "hej")
+            .put_opt(key.as_ref(), value.as_ref(), &self.write_opts)
+            .map_err(|e| BrittMarieError::Insert(e.to_string()))
     }
     #[inline(always)]
+    pub fn put_batch<K, V, I>(&self, kv_pairs: I) -> Result<()>
+    where
+        K: Key,
+        V: Value,
+        I: IntoIterator<Item = (K, V)>,
+    {
+        let mut wb = WriteBatch::default();
+        for (key, value) in kv_pairs {
+            let raw_key = key.into_raw()?;
+            let raw_value = value.into_raw()?;
+            wb.put(raw_key, raw_value);
+        }
+
+        self.db
+            .write_opt(wb, &self.write_opts)
+            .map_err(|e| BrittMarieError::Insert(e.to_string()))
+    }
+
+    #[inline(always)]
     pub fn get(&self, key: impl AsRef<[u8]>) -> Result<Option<Vec<u8>>> {
-        self.db.get(key.as_ref()).with_context(|| "hej")
+        self.db
+            .get(key.as_ref())
+            .map_err(|e| BrittMarieError::Read(e.to_string()))
+    }
+    #[inline(always)]
+    pub fn checkpoint(&self) -> Result<()> {
+        Ok(())
     }
 }

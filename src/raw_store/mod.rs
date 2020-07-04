@@ -1,6 +1,5 @@
 use crate::data::{Key, Value};
-use anyhow::{Context, Result};
-use std::hash::Hash;
+use crate::error::*;
 use std::path::{Path, PathBuf};
 
 cfg_if::cfg_if! {
@@ -8,6 +7,7 @@ cfg_if::cfg_if! {
         mod rocks;
         use rocks as backend;
     } else {
+        // TODO: Add support for a distributed store NDB/TIKV
         panic!("Only supporting embedded mode for now...");
     }
 }
@@ -28,40 +28,44 @@ impl RawStore {
 
     /// Insert a single Key-Value record into the store
     #[inline]
-    pub(crate) fn store<K, V>(&mut self, key: K, value: V)
+    pub(crate) fn put<K, V>(&mut self, key: K, value: V) -> Result<()>
     where
         K: Key,
         V: Value,
     {
-        let raw_key = key.into_raw().unwrap();
-        let raw_value = value.into_raw().unwrap();
-        self.backend.put(raw_key, raw_value).unwrap()
+        let raw_key = key.into_raw()?;
+        let raw_value = value.into_raw()?;
+        self.backend.put(raw_key, raw_value)
     }
 
     /// Insert a batch of Key-Values into the store
     #[inline]
-    pub(crate) fn store_batch<K, V, I>(&mut self, iterator: I)
+    pub(crate) fn put_batch<K, V, I>(&mut self, kv_pairs: I) -> Result<()>
     where
         K: Key,
         V: Value,
-        I: Iterator<Item = (K, V)>,
+        I: IntoIterator<Item = (K, V)>,
     {
-        for (k, v) in iterator {}
+        self.backend.put_batch(kv_pairs)
     }
 
     #[inline]
-    pub(crate) fn fetch<K, V>(&self, key: &K) -> Option<V>
+    pub(crate) fn get<K, V>(&self, key: &K) -> Result<Option<V>>
     where
         K: Key,
         V: Value,
     {
-        let raw_key = key.into_raw().unwrap();
-        let raw_opt = self.backend.get(raw_key).unwrap();
+        let raw_key = key.into_raw()?;
+        let raw_opt = self.backend.get(raw_key)?;
         if let Some(raw) = raw_opt {
-            let v = V::from_raw(&raw);
-            Some(v)
+            let v = V::from_raw(&raw)?;
+            Ok(Some(v))
         } else {
-            None
+            Ok(None)
         }
+    }
+    #[inline]
+    pub fn checkpoint(&mut self) -> Result<()> {
+        self.backend.checkpoint()
     }
 }
