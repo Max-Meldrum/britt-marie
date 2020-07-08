@@ -36,11 +36,8 @@ cfg_if::cfg_if! {
 mod bitmask;
 mod table;
 
-use self::bitmask::BitMask;
-use self::imp::Group;
 use self::table::RawTable;
 use crate::raw_store::RawStore;
-use lru::LruCache;
 use std::cell::{RefCell, UnsafeCell};
 use std::rc::Rc;
 
@@ -76,24 +73,25 @@ where
 {
     /// Creates a HashIndex using the default lazy WriteMode
     #[inline]
-    pub fn new(capacity: usize, raw_store: Rc<RefCell<RawStore>>) -> Self {
-        Self::setup(capacity, WriteMode::default(), raw_store)
+    pub fn new(capacity: usize, mod_factor: f32, raw_store: Rc<RefCell<RawStore>>) -> Self {
+        Self::setup(capacity, mod_factor, WriteMode::default(), raw_store)
     }
 
     /// Creates a ValueIndex with Copy-On-Write enabled
     #[inline]
-    pub fn cow(capacity: usize, raw_store: Rc<RefCell<RawStore>>) -> Self {
-        Self::setup(capacity, WriteMode::Cow, raw_store)
+    pub fn cow(capacity: usize, mod_factor: f32, raw_store: Rc<RefCell<RawStore>>) -> Self {
+        Self::setup(capacity, mod_factor, WriteMode::Cow, raw_store)
     }
 
     fn setup(
         capacity: usize,
+        mod_factor: f32,
         mode: WriteMode,
         raw_store: Rc<RefCell<RawStore>>,
     ) -> HashIndex<K, V> {
         HashIndex {
             hash_builder: DefaultHashBuilder::default(),
-            raw_table: UnsafeCell::new(RawTable::with_capacity(capacity)),
+            raw_table: UnsafeCell::new(RawTable::with_capacity(capacity, mod_factor)),
             mode,
             raw_store,
         }
@@ -111,24 +109,43 @@ where
         unsafe { &mut *self.raw_table.get() }
     }
 
+    /// Insert a Key-Value record into the RawTable
+    ///
+    /// The function will evict a bucket if the table is above the given
+    /// modification threshold.
     #[inline]
     fn insert(&self, k: K, v: V) -> Option<V> {
         let hash = make_hash(&self.hash_builder, &k);
         let table = self.raw_table_mut();
         unsafe {
-            if let Some(item) = (*table).find(hash, |x| k.eq(&x.0)) {
+            if let Some(item) = table.find_mut(hash, |x| k.eq(&x.0)) {
                 Some(std::mem::replace(&mut item.as_mut().1, v))
             } else {
-                if (*table).is_full() {
-                    // TODO: evict entry
-                    None
-                } else {
-                    let hash_builder = &self.hash_builder;
-                    (*table).insert(hash, (k, v), |x| make_hash(hash_builder, &x.0));
-                    None
+                if table.above_mod_threshold() {
+                    let bucket = table.evict_mod_bucket();
+                    let &(ref key, ref value) = bucket.as_ref();
+                    // TODO: handle err?
+                    let _ = self.raw_store_put(key.clone(), value.clone());
                 }
+                // continue with insert
+                table.insert(hash, (k, v));
+                None
             }
         }
+    }
+
+    /// Internal helper to get a value from the RawStore
+    #[inline]
+    fn raw_store_get(&self, k: &K) -> Result<Option<V>> {
+        let raw_store = self.raw_store.borrow_mut();
+        raw_store.get(k)
+    }
+
+    /// Internal helper to put a key-value record into the RawStore
+    #[inline]
+    fn raw_store_put(&self, k: K, v: V) -> Result<()> {
+        let mut raw_store = self.raw_store.borrow_mut();
+        raw_store.put(k, v)
     }
 
     #[inline]
@@ -149,7 +166,7 @@ where
         let hash = make_hash(&self.hash_builder, k);
         let table = self.raw_table_mut();
         table
-            .find(hash, |x| k.eq(x.0.borrow()))
+            .find_mut(hash, |x| k.eq(x.0.borrow()))
             .map(|item| unsafe { &mut item.as_mut().1 })
     }
 
@@ -176,6 +193,10 @@ where
         self.raw_table().len() == 0
     }
     #[inline]
+    pub fn mod_limit(&self) -> usize {
+        self.raw_table().mod_limit()
+    }
+    #[inline]
     pub fn capacity(&self) -> usize {
         self.raw_table().capacity()
     }
@@ -187,15 +208,18 @@ where
     V: Value,
 {
     fn persist(&self) -> Result<()> {
-        if self.mode.is_cow() {
-            // Every modification is already pushed to the raw store
-            Ok(())
-        } else {
-            // TODO: Iterate over all buckets that have Modified CTRL byte.
-            // NOTE: Make sure to set the CTRL byte to EVICTED
-            // Thus after the iteration, all ctrl bytes should either be EMPTY or EVICTED
-            Ok(())
+        if self.mode.is_lazy() {
+            let table = self.raw_table();
+            unsafe {
+                // TODO: use raw_store.put_batch(..)?;
+                for bucket in table.iter_modified() {
+                    let &(ref key, ref value) = bucket.as_ref();
+                    self.raw_store_put(key.clone(), value.clone())?;
+                }
+            };
         }
+        // Else just ignore as COW copies on each modification
+        Ok(())
     }
 }
 
@@ -214,7 +238,7 @@ where
         }
 
         // Attempt to find the value in the RawStore
-        if let Ok(entry_opt) = self.raw_store.borrow_mut().get::<K, V>(key) {
+        if let Ok(entry_opt) = self.raw_store_get(key) {
             if let Some(v) = entry_opt {
                 // Insert the value back into the index
                 let _ = self.insert(key.clone(), v);
@@ -251,7 +275,7 @@ where
         }
 
         // Attempt to find the value in the RawStore
-        if let Ok(entry_opt) = self.raw_store.borrow_mut().get::<K, V>(key) {
+        if let Ok(entry_opt) = self.raw_store_get(key) {
             if let Some(mut value) = entry_opt {
                 // run the rmw op on the value
                 f(&mut value);
@@ -273,26 +297,23 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn basic_test() {
-        let raw_store = Rc::new(RefCell::new(RawStore::new("/tmp/hash")));
-        let mut hash_index: HashIndex<u64, u64> = HashIndex::new(128, raw_store);
-        hash_index.put(1, 10);
-        assert_eq!(hash_index.get(&1), Some(&10));
-        assert_eq!(hash_index.get(&5), None);
-        assert_eq!(
-            hash_index.rmw(&1, |v| {
-                *v += 5;
-            }),
-            true
-        );
-        assert_eq!(hash_index.get(&1), Some(&15));
-        assert_eq!(
-            hash_index.rmw(&5, |v| {
-                *v += 5;
-            }),
-            false
-        );
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().to_str().unwrap();
+        let raw_store = Rc::new(RefCell::new(RawStore::new(path)));
+        let mod_factor: f32 = 0.4;
+        let capacity = 4;
+        let mut hash_index: HashIndex<u64, u64> =
+            HashIndex::new(capacity, mod_factor, raw_store.clone());
+        for i in 0..1024 {
+            hash_index.put(i as u64, i as u64);
+            let key: u64 = i as u64;
+            assert_eq!(hash_index.get(&key), Some(&key));
+        }
+        hash_index.persist().unwrap();
+        raw_store.borrow_mut().checkpoint().unwrap();
     }
 }

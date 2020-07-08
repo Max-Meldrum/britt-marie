@@ -1,5 +1,9 @@
 use crate::error::*;
 
+// TODO: Fix this mess.
+// NOTE: Create common trait for BrittMarie data type and
+//       put prost as default behind a cfg flag. 
+
 pub trait Value: prost::Message + Default + Clone + 'static {
     fn into_raw(&self) -> Result<Vec<u8>> {
         let mut buf = Vec::with_capacity(self.encoded_len());

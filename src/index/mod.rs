@@ -22,6 +22,10 @@ impl WriteMode {
     pub fn is_cow(&self) -> bool {
         *self == WriteMode::Cow
     }
+    #[inline(always)]
+    pub fn is_lazy(&self) -> bool {
+        *self == WriteMode::Lazy
+    }
 }
 
 impl Default for WriteMode {

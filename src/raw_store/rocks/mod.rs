@@ -1,9 +1,6 @@
 use crate::data::{Key, Value};
 use crate::error::*;
-use rocksdb::{
-    checkpoint::Checkpoint, ColumnFamily, ColumnFamilyDescriptor, DBPinnableSlice, Options,
-    SliceTransform, WriteBatch, WriteOptions, DB,
-};
+use rocksdb::{checkpoint::Checkpoint, WriteBatch, WriteOptions, DB};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -21,6 +18,7 @@ pub struct Backend {
     db: DB,
     write_opts: WriteOptions,
     path: PathBuf,
+    checkpoint_counter: u64,
 }
 
 impl Backend {
@@ -34,6 +32,7 @@ impl Backend {
             db,
             write_opts: default_write_opts(),
             path,
+            checkpoint_counter: 0,
         }
     }
 
@@ -73,7 +72,20 @@ impl Backend {
             .map_err(|e| BrittMarieError::Read(e.to_string()))
     }
     #[inline(always)]
-    pub fn checkpoint(&self) -> Result<()> {
+    pub fn checkpoint(&mut self) -> Result<()> {
+        let path = self.path.join(self.checkpoint_counter.to_string());
+        // taken from arcon_state
+        self.db
+            .flush()
+            .map_err(|e| BrittMarieError::Checkpoint(e.to_string()))?;
+        let checkpointer =
+            Checkpoint::new(&self.db).map_err(|e| BrittMarieError::Checkpoint(e.to_string()))?;
+
+        checkpointer
+            .create_checkpoint(&path)
+            .map_err(|e| BrittMarieError::Checkpoint(e.to_string()))?;
+
+        self.checkpoint_counter += 1;
         Ok(())
     }
 }

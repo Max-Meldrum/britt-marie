@@ -1,4 +1,4 @@
-use britt_marie::{BrittMarie, HashIndex, HashOps, IndexOps, RawStore, ValueIndex, ValueOps};
+use britt_marie::{BrittMarie, IndexOps, RawStore, ValueIndex, ValueOps};
 use std::cell::RefCell;
 use std::rc::Rc;
 

@@ -1,6 +1,6 @@
 use crate::data::{Key, Value};
 use crate::error::*;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "embedded")] {
@@ -28,7 +28,7 @@ impl RawStore {
 
     /// Insert a single Key-Value record into the store
     #[inline]
-    pub(crate) fn put<K, V>(&mut self, key: K, value: V) -> Result<()>
+    pub fn put<K, V>(&mut self, key: K, value: V) -> Result<()>
     where
         K: Key,
         V: Value,
@@ -40,17 +40,17 @@ impl RawStore {
 
     /// Insert a batch of Key-Values into the store
     #[inline]
-    pub(crate) fn put_batch<K, V, I>(&mut self, kv_pairs: I) -> Result<()>
+    pub fn put_batch<K, V, I>(&mut self, kv_pairs: I) -> Result<()>
     where
         K: Key,
         V: Value,
-        I: IntoIterator<Item = (K, V)>,
+        I: Iterator<Item = (K, V)>,
     {
         self.backend.put_batch(kv_pairs)
     }
 
     #[inline]
-    pub(crate) fn get<K, V>(&self, key: &K) -> Result<Option<V>>
+    pub fn get<K, V>(&self, key: &K) -> Result<Option<V>>
     where
         K: Key,
         V: Value,

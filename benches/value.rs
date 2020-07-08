@@ -1,4 +1,4 @@
-use britt_marie::prelude::*;
+use britt_marie::{ValueIndex, ValueOps, RawStore};
 use criterion::{criterion_group, criterion_main, Bencher, Criterion};
 use std::cell::RefCell;
 use std::rc::Rc;

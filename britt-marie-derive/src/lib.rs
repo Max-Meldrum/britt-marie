@@ -5,9 +5,7 @@ extern crate syn;
 extern crate quote;
 
 use proc_macro::TokenStream;
-use proc_macro2::{Ident, Span};
-use quote::ToTokens;
-use syn::{parse_macro_input, Data, DataStruct, DeriveInput, Fields, FieldsNamed, FieldsUnnamed};
+use syn::{parse_macro_input, DeriveInput};
 
 #[proc_macro_derive(BrittMarie)]
 pub fn britt_marie(input: TokenStream) -> TokenStream {

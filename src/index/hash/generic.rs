@@ -135,6 +135,12 @@ impl Group {
         self.match_empty_or_deleted().invert()
     }
 
+    #[inline]
+    pub fn match_modified(self) -> BitMask {
+        let full = self.match_full();
+        self.match_empty_or_deleted().invert()
+    }
+
     /// Performs the following transformation on all bytes in the group:
     /// - `EMPTY => EMPTY`
     /// - `DELETED => EMPTY`

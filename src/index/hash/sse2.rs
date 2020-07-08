@@ -60,15 +60,6 @@ impl Group {
         Group(x86::_mm_load_si128(ptr as *const _))
     }
 
-    /// Stores the group of bytes to the given address, which must be
-    /// aligned to `mem::align_of::<Group>()`.
-    #[inline]
-    #[allow(clippy::cast_ptr_alignment)]
-    pub unsafe fn store_aligned(self, ptr: *mut u8) {
-        // FIXME: use align_offset once it stabilizes
-        debug_assert_eq!(ptr as usize & (mem::align_of::<Self>() - 1), 0);
-        x86::_mm_store_si128(ptr as *mut _, self.0);
-    }
 
     /// Returns a `BitMask` indicating all bytes in the group which have
     /// the given value.
@@ -118,12 +109,30 @@ impl Group {
         self.match_empty_or_deleted().invert()
     }
 
+    /// Returns a `BitMask` indicating all bytes in the group which are modified.
+    #[inline]
+    pub fn match_modified(&self) -> BitMask {
+        // NOTE: A modified meta byte has the high bit set to 1
+        //       thus we can simply run the same "match_empty_or_deleted" function
+        //       as it tests for the same thing.
+        self.match_empty_or_deleted()
+    }
+
+
+    /// Returns a `BitMask` indicating all bytes in the group which are safe.
+    #[inline]
+    pub fn _match_safe(&self) -> BitMask {
+        // NOTE: Same logic as with regular ctrl byte. The meta byte is
+        // safe if the highest bit is set to zero.
+        self.match_full()
+    }
+
     /// Performs the following transformation on all bytes in the group:
     /// - `EMPTY => EMPTY`
     /// - `DELETED => EMPTY`
     /// - `FULL => DELETED`
     #[inline]
-    pub fn convert_special_to_empty_and_full_to_deleted(self) -> Self {
+    pub fn _convert_special_to_empty_and_full_to_deleted(self) -> Self {
         // Map high_bit = 1 (EMPTY or DELETED) to 1111_1111
         // and high_bit = 0 (FULL) to 1000_0000
         //
