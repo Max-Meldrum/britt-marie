@@ -125,7 +125,7 @@ where
                     let bucket = table.evict_mod_bucket();
                     let &(ref key, ref value) = bucket.as_ref();
                     // TODO: handle err?
-                    let _ = self.raw_store_put(key.clone(), value.clone());
+                    let _ = self.raw_store_put(key, value);
                 }
                 // continue with insert
                 table.insert(hash, (k, v));
@@ -143,7 +143,7 @@ where
 
     /// Internal helper to put a key-value record into the RawStore
     #[inline]
-    fn raw_store_put(&self, k: K, v: V) -> Result<()> {
+    fn raw_store_put(&self, k: &K, v: &V) -> Result<()> {
         let mut raw_store = self.raw_store.borrow_mut();
         raw_store.put(k, v)
     }
@@ -214,7 +214,7 @@ where
                 // TODO: use raw_store.put_batch(..)?;
                 for bucket in table.iter_modified() {
                     let &(ref key, ref value) = bucket.as_ref();
-                    self.raw_store_put(key.clone(), value.clone())?;
+                    self.raw_store_put(key, value)?;
                 }
             };
         }

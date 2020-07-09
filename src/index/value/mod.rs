@@ -66,7 +66,7 @@ where
         if let Some(data) = &self.data {
             self.raw_store
                 .borrow_mut()
-                .put(self.key.clone(), data.clone())?;
+                .put(&self.key, data)?;
         }
 
         Ok(())

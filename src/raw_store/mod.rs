@@ -28,7 +28,7 @@ impl RawStore {
 
     /// Insert a single Key-Value record into the store
     #[inline]
-    pub fn put<K, V>(&mut self, key: K, value: V) -> Result<()>
+    pub fn put<K, V>(&mut self, key: &K, value: &V) -> Result<()>
     where
         K: Key,
         V: Value,

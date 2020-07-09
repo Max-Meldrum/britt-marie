@@ -6,3 +6,6 @@ edition = "2018"
 
 [dependencies]
 britt-marie = { path = ".."}
+
+[dev-dependencies]
+tempfile = "3.1.0"

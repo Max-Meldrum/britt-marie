@@ -1,7 +1,7 @@
 //! Britt-Marie is a special purpose storage solution for stream processing systems
 //!
-//! Britt-Marie offers a set of lazy indexes that are backed by a durable state backend. The
-//! implementations are by default lazy, however, it is possible to enable COW (Copy on Write) for individual
+//! Britt-Marie offers a set of indexes that are backed by a durable state backend. The
+//! implementations are by default lazy. It is however possible to enable COW (Copy on Write) for individual
 //! indexes.
 //!
 //!
@@ -29,7 +29,7 @@
 )]
 
 /// BrittMarie Data types
-mod data;
+pub mod data;
 /// Error types
 mod error;
 /// Set of compiler hints

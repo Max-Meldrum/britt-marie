@@ -43,6 +43,7 @@ fn hash(c: &mut Criterion) {
     group.bench_function("ordered rmw std hashmap", rmw_ordered_hash);
     group.bench_function("ordered rmw btreemap", rmw_ordered_btreemap);
     group.bench_function("ordered rmw britt-marie::HashIndex", rmw_ordered_hash_index);
+    group.bench_function("ordered rmw raw_store", rmw_ordered_raw_store);
 
     group.bench_function("random rmw std hashmap", rmw_random_hash);
     group.bench_function("random rmw britt-marie::HashIndex", rmw_random_hash_index);
@@ -75,7 +76,7 @@ fn random_range_insert_raw_store(b: &mut Bencher) {
     let mut raw_store = RawStore::new("/tmp/bench");
     b.iter(|| {
         for id in RANDOM_INDEXES.iter() {
-            let _ = raw_store.put(*id, 1000);
+            let _ = raw_store.put(id, &1000);
         }
     });
 }
@@ -113,7 +114,7 @@ fn ordered_insert_raw_store(b: &mut Bencher) {
     let mut raw_store = RawStore::new("/tmp/ordered");
     b.iter(|| {
         for i in 0..INSERT_COUNT {
-            let _ = raw_store.put(i, 1000);
+            let _ = raw_store.put(&i, &1000);
         }
     });
 }
@@ -153,6 +154,18 @@ fn rmw_ordered_hash_index(b: &mut Bencher) {
             hash_index.rmw(&i, |val| {
                 *val += 10;
             });
+        }
+    });
+}
+fn rmw_ordered_raw_store(b: &mut Bencher) {
+    let mut raw_store = RawStore::new("/tmp/bench");
+    for i in 0..INSERT_COUNT {
+        let _ = raw_store.put(&i, &1000);
+    }
+    b.iter(|| {
+        for i in 0..INSERT_COUNT {
+            let val: Option<u64> = raw_store.get(&i).unwrap();
+            let _ = raw_store.put(&i, &(val.unwrap() + 10));
         }
     });
 }
