@@ -50,9 +50,9 @@ where
     V: Value,
 {
     /// Hasher for the keys
-    pub(crate) hash_builder: fxhash::FxBuildHasher,
-    /// HashBrown's RawTable impl
-    pub(crate) raw_table: UnsafeCell<RawTable<(K, V)>>,
+    hash_builder: fxhash::FxBuildHasher,
+    /// In-memory RawTable
+    raw_table: UnsafeCell<RawTable<(K, V)>>,
     /// Write Mode
     mode: WriteMode,
     /// The RawStore layer where things are persisted
@@ -209,12 +209,13 @@ where
 {
     fn persist(&self) -> Result<()> {
         if self.mode.is_lazy() {
-            let table = self.raw_table();
+            let table = self.raw_table_mut();
             unsafe {
+                let mut raw_store = self.raw_store.borrow_mut();
                 // TODO: use raw_store.put_batch(..)?;
                 for bucket in table.iter_modified() {
                     let &(ref key, ref value) = bucket.as_ref();
-                    self.raw_store_put(key, value)?;
+                    raw_store.put(key, value)?;
                 }
             };
         }

@@ -1,6 +1,9 @@
 // Copyright (c) 2016 Amanieu d'Antras
 // SPDX-License-Identifier: MIT
 
+// Modifications Copyright (c) KTH Royal Institute of Technology
+// SPDX-License-Identifier: MIT
+
 use core::alloc::Layout;
 use core::hint;
 use core::iter::FusedIterator;
@@ -74,6 +77,7 @@ const DELETED: u8 = 0b1000_0000;
 const MODIFIED: u8 = 0b1000_0000;
 /// Meta byte value for a safe bucket.
 const SAFE: u8 = 0b0000_0000;
+
 
 /// Checks whether a control byte represents a full bucket (top bit is clear).
 #[inline]
@@ -622,10 +626,10 @@ impl<T> RawTable<T> {
     #[inline]
     #[allow(unused_assignments)]
     pub(crate) unsafe fn evict_mod_bucket(&mut self) -> Bucket<T> {
-        // TODO: Fix eviction...
-        // This simply just takes the first modified bucket it finds....
-        //
-        // Perhaps a second chance protocol?
+        debug_assert_ne!(self.mod_counter, 0);
+        // TODO: Fix a better eviction policy
+        // This simply takes the first modified bucket it finds....
+
         let meta_end = self.meta.as_ptr().add(self.buckets());
         let mut next_meta = self.meta.as_ptr().add(Group::WIDTH);
         let data = Bucket::from_base_index(self.data_end(), 0);
@@ -637,7 +641,7 @@ impl<T> RawTable<T> {
                 let bucket = data.next_n(index);
                 // Get index for this bucket
                 let bucket_index = self.bucket_index(&bucket);
-                // Set the meta byte of the index to SAFE
+
                 if self.growth_left == 0 {
                     // If there is no space left, then actually "erase" it.
                     self.erase_by_index(bucket_index);
@@ -649,7 +653,7 @@ impl<T> RawTable<T> {
             }
 
             if next_meta >= meta_end {
-                panic!("Could not find any modified bucket to evict");
+                panic!("This should not happen as mod_counter is above zero");
             }
 
             // We might read past self.end up to the next group boundary,
@@ -692,8 +696,8 @@ impl<T> RawTable<T> {
 
     /// Searches for an element in the table.
     ///
-    /// Similar to the find function, but we use it for mutable finds and set the
-    /// found bucket's meta byte to MODIFIED.
+    /// Similar to the find function, but we use it for mutable finds and thus set
+    /// bucket's meta byte to MODIFIED.
     ///
     /// Note that we simply assume that the caller will modify the underlying value.
     #[inline]
@@ -794,8 +798,9 @@ impl<T> RawTable<T> {
     /// Returns an iterator over every element in the table that has a meta byte set as MODIFIED.
     /// Note that this iterator will reset every MODIFIED byte to SAFE.
     #[inline]
-    pub unsafe fn iter_modified(&self) -> ModifiedIterator<T> {
+    pub unsafe fn iter_modified(&mut self) -> ModifiedIterator<T> {
         let data = Bucket::from_base_index(self.data_end(), 0);
+        self.mod_counter = 0;
         ModifiedIterator {
             iter: RawIterModified::new(
                 self.ctrl.as_ptr(),

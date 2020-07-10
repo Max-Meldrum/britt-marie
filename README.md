@@ -9,6 +9,7 @@ Britt-Marie offers a set of indexes that are backed by a durable state backend. 
 implementations are by default lazy. It is however possible to enable COW (Copy on Write) for individual
 indexes.
 
+
 ```rust
 use britt_marie::{BrittMarie, HashIndex, HashOps, IndexOps, RawStore, ValueIndex, ValueOps};
 use std::cell::RefCell;
