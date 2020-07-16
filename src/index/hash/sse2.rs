@@ -118,15 +118,6 @@ impl Group {
         self.match_empty_or_deleted()
     }
 
-
-    /// Returns a `BitMask` indicating all bytes in the group which are safe.
-    #[inline]
-    pub fn _match_safe(&self) -> BitMask {
-        // NOTE: Same logic as with regular ctrl byte. The meta byte is
-        // safe if the highest bit is set to zero.
-        self.match_full()
-    }
-
     /// Performs the following transformation on all bytes in the group:
     /// - `EMPTY => EMPTY`
     /// - `DELETED => EMPTY`

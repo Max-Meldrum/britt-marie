@@ -27,6 +27,7 @@ cfg_if::cfg_if! {
     ))] {
         mod sse2; use sse2 as imp;
     } else {
+        panic!("sse2 needed for now");
         #[path = "generic.rs"]
         mod generic;
         use generic as imp;
@@ -118,11 +119,16 @@ where
         let hash = make_hash(&self.hash_builder, &k);
         let table = self.raw_table_mut();
         unsafe {
+            // If the entry is already in the RawTable then
+            // replace it with new one. Otherwise, insert the
+            // new entry.
             if let Some(item) = table.find_mut(hash, |x| k.eq(&x.0)) {
                 Some(std::mem::replace(&mut item.as_mut().1, v))
             } else {
+                // If we are above the modification threshold, then
+                // move an RawTable entry to the RawStore.
                 if table.above_mod_threshold() {
-                    let bucket = table.evict_mod_bucket();
+                    let bucket = table.evict_mod_bucket(hash);
                     let &(ref key, ref value) = bucket.as_ref();
                     // TODO: handle err?
                     let _ = self.raw_store_put(key, value);

@@ -75,9 +75,11 @@ const DELETED: u8 = 0b1000_0000;
 
 /// Meta byte value for a modified bucket.
 const MODIFIED: u8 = 0b1000_0000;
+const MODIFIED_TOUCHED: u8 = 0b1100_0000;
+
 /// Meta byte value for a safe bucket.
 const SAFE: u8 = 0b0000_0000;
-
+const SAFE_TOUCHED: u8 = 0b0100_0000;
 
 /// Checks whether a control byte represents a full bucket (top bit is clear).
 #[inline]
@@ -101,14 +103,14 @@ fn special_is_empty(ctrl: u8) -> bool {
 /// Checks whether a meta byte represents a modified bucket (top bit is set).
 #[inline]
 #[allow(dead_code)]
-fn is_modified(ctrl: u8) -> bool {
-    ctrl & 0x80 != 0
+fn is_modified(meta: u8) -> bool {
+    meta & 0x80 != 0
 }
 
 /// Checks whether a meta byte represents a safe bucket (top bit is clear).
 #[inline]
-fn is_safe(ctrl: u8) -> bool {
-    ctrl & 0x80 == 0
+fn is_safe(meta: u8) -> bool {
+    meta & 0x80 == 0
 }
 
 /// Primary hash function, used to select the initial bucket to probe from.
@@ -437,8 +439,8 @@ impl<T> RawTable<T> {
     /// the given number of elements without reallocating.
     pub fn with_capacity(capacity: usize, mod_factor: f32) -> Self {
         assert!(
-            mod_factor > 0.0 && mod_factor <= 1.0,
-            "Modification factor needs to be set between 0.0 and 1.0"
+            mod_factor > 0.0 && mod_factor <= 0.9,
+            "Modification factor needs to be set between 0.0 and 0.9"
         );
         Self::try_with_capacity(capacity, mod_factor, Fallibility::Infallible)
             .unwrap_or_else(|_| unsafe { hint::unreachable_unchecked() })
@@ -467,7 +469,7 @@ impl<T> RawTable<T> {
 
     /// Returns the index of a bucket from a `Bucket`.
     #[inline]
-    pub unsafe fn bucket_index(&self, bucket: &Bucket<T>) -> usize {
+    pub unsafe fn _bucket_index(&self, bucket: &Bucket<T>) -> usize {
         bucket.to_base_index(self.data_end())
     }
 
@@ -533,8 +535,11 @@ impl<T> RawTable<T> {
     }
     /// Sets a meta byte
     #[inline]
-    unsafe fn set_meta(&self, index: usize, ctrl: u8) {
-        *self.meta(index) = ctrl;
+    unsafe fn set_meta(&self, index: usize, meta: u8) {
+        // Using same logic as set_ctrl
+        let index2 = ((index.wrapping_sub(Group::WIDTH)) & self.bucket_mask) + Group::WIDTH;
+        *self.meta(index) = meta;
+        *self.meta(index2) = meta;
     }
 
     /// Sets a control byte, and possibly also the replicated control byte at
@@ -604,17 +609,46 @@ impl<T> RawTable<T> {
     }
 
     /// Searches for an index that is suitable to "erase"
+    ///
+    /// There must always be at least 1 SAFE bucket in the table
     #[inline]
-    pub(crate) fn make_space(&mut self, hash: u64) {
+    fn clear_safe_bucket(&mut self, hash: u64) {
         for pos in self.probe_seq(hash) {
             unsafe {
-                let group = Group::load(self.ctrl(pos));
-                if let Some(bit) = group.match_full().lowest_set_bit() {
-                    let index = (pos + bit) & self.bucket_mask;
-                    if is_safe(*self.meta(index)) {
-                        self.erase_by_index(index);
-                        return;
+                // In the best case we find a bucket in the first group
+                // as the insert after will be jumping to the same group.
+                let group = Group::load(self.meta(pos));
+
+                // First attempt to match on SAFE meta byte within the group.
+                // Otherwise, fall back to SAFE_TOUCHED.
+                let bit_opt = {
+                    let safe = group.match_byte(SAFE).lowest_set_bit();
+                    if safe.is_none() {
+                        group.match_byte(SAFE_TOUCHED).lowest_set_bit()
+                    } else {
+                        safe
                     }
+                };
+
+                if let Some(bit) = bit_opt {
+                    let result = (pos + bit) & self.bucket_mask;
+
+                    let index = {
+                        if unlikely(is_modified(*self.meta(result))) {
+                            debug_assert!(self.bucket_mask < Group::WIDTH);
+                            debug_assert_ne!(pos, 0);
+                            Group::load_aligned(self.meta(0))
+                                .match_empty_or_deleted()
+                                .lowest_set_bit_nonzero()
+                        } else {
+                            result
+                        }
+                    };
+                    self.erase_by_index(index);
+                    // Set its meta byte to SAFE in case it was SAFE_TOUCHED
+                    self.set_meta(index, SAFE);
+                    // We are done, return...
+                    return;
                 }
             }
         }
@@ -623,47 +657,67 @@ impl<T> RawTable<T> {
     }
 
     /// Searches for a modified bucket to evict
+    ///
+    /// Safety: Should only be called when there is at least 1 modified bucket in the table
     #[inline]
     #[allow(unused_assignments)]
-    pub(crate) unsafe fn evict_mod_bucket(&mut self) -> Bucket<T> {
+    pub(crate) unsafe fn evict_mod_bucket(&mut self, hash: u64) -> Bucket<T> {
         debug_assert_ne!(self.mod_counter, 0);
-        // TODO: Fix a better eviction policy
-        // This simply takes the first modified bucket it finds....
+        for pos in self.probe_seq(hash) {
+            let group = Group::load(self.meta(pos));
 
-        let meta_end = self.meta.as_ptr().add(self.buckets());
-        let mut next_meta = self.meta.as_ptr().add(Group::WIDTH);
-        let data = Bucket::from_base_index(self.data_end(), 0);
-        let mut current_group = Group::load_aligned(self.meta.as_ptr()).match_modified();
+            // First match for MODIFIED meta byte. If that fails
+            // then check for MODIFIED_TOUCHED within the same group.
+            let bit_match = {
+                let modified = group.match_byte(MODIFIED).lowest_set_bit();
+                if modified.is_none() {
+                    group.match_byte(MODIFIED_TOUCHED).lowest_set_bit()
+                } else {
+                    modified
+                }
+            };
 
-        loop {
-            if let Some(index) = current_group.lowest_set_bit() {
-                current_group = current_group.remove_lowest_bit();
-                let bucket = data.next_n(index);
-                // Get index for this bucket
-                let bucket_index = self.bucket_index(&bucket);
+            if let Some(bit) = bit_match {
+                let result = (pos + bit) & self.bucket_mask;
+
+                // In tables smaller than the group width, trailing meta
+                // bytes outside the range of the table are filled with
+                // EMPTY entries. These will unfortunately trigger a
+                // match, but once masked may point to a full bucket that
+                // is already occupied. We detect this situation here and
+                // perform a second scan starting at the begining of the
+                // table. This second scan is guaranteed to find an empty
+                // slot (due to the load factor) before hitting the trailing
+                // control bytes (containing EMPTY).
+                let index = {
+                    if unlikely(is_safe(*self.meta(result))) {
+                        debug_assert!(self.bucket_mask < Group::WIDTH);
+                        debug_assert_ne!(pos, 0);
+                        Group::load_aligned(self.meta(0))
+                            .match_empty_or_deleted()
+                            .lowest_set_bit_nonzero()
+                    } else {
+                        result
+                    }
+                };
+
+                let bucket = self.bucket(index);
 
                 if self.growth_left == 0 {
                     // If there is no space left, then actually "erase" it.
-                    self.erase_by_index(bucket_index);
+                    self.erase_by_index(index);
                 }
+
                 // Set bucket to safe
-                self.set_meta(bucket_index, SAFE);
+                self.set_meta(index, SAFE);
                 self.mod_counter -= 1;
+
                 return bucket;
             }
-
-            if next_meta >= meta_end {
-                panic!("This should not happen as mod_counter is above zero");
-            }
-
-            // We might read past self.end up to the next group boundary,
-            // but this is fine because it only occurs on tables smaller
-            // than the group size where the trailing control bytes are all
-            // EMPTY. On larger tables self.end is guaranteed to be aligned
-            // to the group size (since tables are power-of-two sized).
-            current_group = Group::load_aligned(next_meta).match_modified();
-            next_meta = next_meta.add(Group::WIDTH);
         }
+
+        // probe_seq never returns.
+        unreachable!();
     }
 
     /// Inserts a new element into the table.
@@ -674,17 +728,19 @@ impl<T> RawTable<T> {
         unsafe {
             let mut index = self.find_insert_slot(hash);
 
-            // We can avoid growing the table once we have reached our load
-            // factor if we are replacing a tombstone. This works since the
-            // number of EMPTY slots does not change in this case.
             let old_ctrl = *self.ctrl(index);
             if unlikely(self.growth_left == 0 && special_is_empty(old_ctrl)) {
-                self.make_space(hash);
+                // Rather than regrowing the table, the modification factor
+                // ensures there are always safe buckets available. We can simply
+                // erase a SAFE index by setting its ctrl byte to EMPTY/DELETED.
+                self.clear_safe_bucket(hash);
                 index = self.find_insert_slot(hash);
             }
 
             let bucket = self.bucket(index);
-            self.growth_left -= special_is_empty(old_ctrl) as usize;
+            self.growth_left = self
+                .growth_left
+                .saturating_sub(special_is_empty(old_ctrl) as usize);
             self.set_ctrl(index, h2(hash));
             self.set_meta(index, MODIFIED);
             bucket.write(value);
@@ -697,7 +753,7 @@ impl<T> RawTable<T> {
     /// Searches for an element in the table.
     ///
     /// Similar to the find function, but we use it for mutable finds and thus set
-    /// bucket's meta byte to MODIFIED.
+    /// bucket's meta byte to MODIFIED_TOUCHED.
     ///
     /// Note that we simply assume that the caller will modify the underlying value.
     #[inline]
@@ -709,10 +765,15 @@ impl<T> RawTable<T> {
                     let index = (pos + bit) & self.bucket_mask;
                     let bucket = self.bucket(index);
                     if likely(eq(bucket.as_ref())) {
+                        // If the meta was safe, then increase modification
+                        // counter as we are setting the meta to MODIFIED_TOUCHED.
                         if is_safe(*self.meta(index)) {
-                            self.set_meta(index, MODIFIED);
+                            // TODO: This might put us above mod_limit?
+                            // Perhaps allow batched modification evictions?
                             self.mod_counter += 1;
                         }
+
+                        self.set_meta(index, MODIFIED_TOUCHED);
                         return Some(bucket);
                     }
                 }
@@ -736,6 +797,9 @@ impl<T> RawTable<T> {
                     let index = (pos + bit) & self.bucket_mask;
                     let bucket = self.bucket(index);
                     if likely(eq(bucket.as_ref())) {
+                        if is_safe(*self.meta(index)) {
+                            self.set_meta(index, SAFE_TOUCHED);
+                        }
                         return Some(bucket);
                     }
                 }
