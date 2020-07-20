@@ -8,15 +8,16 @@ use britt_marie::{HashIndex, HashOps, RawStore};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-const MOD_FACTORS: [f32; 3] = [0.3, 0.5, 0.9];
-const CAPACITY: [usize; 3] = [256, 512, 1024];
-const INSERT_COUNT: u64 = 1000;
+const MOD_FACTORS: [f32; 3] = [0.3, 0.5, 0.8];
+const CAPACITY: [usize; 3] = [512, 4096, 10024];
+const TOTAL_KEYS: u64 = 10000;
+const TOTAL_OPERATIONS: u64 = 1000;
 
 static RANDOM_INDEXES: Lazy<Vec<u64>> = Lazy::new(|| {
     let mut rng = rand::thread_rng();
-    let mut indexes = Vec::with_capacity(INSERT_COUNT as usize);
-    for _i in 0..INSERT_COUNT {
-        indexes.push(rng.gen_range(0, INSERT_COUNT));
+    let mut indexes = Vec::with_capacity(TOTAL_OPERATIONS as usize);
+    for _i in 0..TOTAL_OPERATIONS {
+        indexes.push(rng.gen_range(0, TOTAL_KEYS));
     }
     indexes
 });
@@ -72,11 +73,23 @@ impl LargeStruct {
 
 fn hash(c: &mut Criterion) {
     let mut group = c.benchmark_group("hash");
-    group.throughput(Throughput::Elements(INSERT_COUNT));
+    group.throughput(Throughput::Elements(TOTAL_OPERATIONS));
 
     for input in MOD_FACTORS.iter().cartesian_product(CAPACITY.iter()) {
         let (mod_factor, capacity) = input;
         let description = format!("mod_factor: {}, capacity: {}", mod_factor, capacity);
+
+        group.bench_with_input(
+            BenchmarkId::new("Random Get SmallStruct", description.clone()),
+            &(mod_factor, capacity),
+            |b, (&mod_factor, &capacity)| random_get_small(b, capacity, mod_factor),
+        );
+        group.bench_with_input(
+            BenchmarkId::new("Random Get LargeStruct", description.clone()),
+            &(mod_factor, capacity),
+            |b, (&mod_factor, &capacity)| random_get_large(b, capacity, mod_factor),
+        );
+
         group.bench_with_input(
             BenchmarkId::new("Insert SmallStruct", description.clone()),
             &(mod_factor, capacity),
@@ -100,6 +113,8 @@ fn hash(c: &mut Criterion) {
             |b, (&mod_factor, &capacity)| rmw_large(b, capacity, mod_factor),
         );
     }
+    group.bench_function("Random Get Small RawStore", raw_store_random_small_get);
+    group.bench_function("Random Get Large RawStore", raw_store_random_large_get);
     group.bench_function("Insert SmallStruct RawStore", insert_raw_store_small);
     group.bench_function("Insert LargeStruct RawStore", insert_raw_store_large);
     // TODO: merge operator
@@ -167,14 +182,17 @@ fn rmw_small(b: &mut Bencher, capacity: usize, mod_factor: f32) {
     let raw_store = Rc::new(RefCell::new(RawStore::new(path)));
     let mut hash_index: HashIndex<u64, SmallStruct> =
         HashIndex::new(capacity, mod_factor, raw_store.clone());
-    for i in 0..INSERT_COUNT {
+    for i in 0..TOTAL_KEYS {
         hash_index.put(i, SmallStruct::new());
     }
     b.iter(|| {
         for i in RANDOM_INDEXES.iter() {
-            hash_index.rmw(&i, |val| {
-                val.x2 += 10;
-            });
+            assert_eq!(
+                hash_index.rmw(&i, |val| {
+                    val.x2 += 10;
+                }),
+                true
+            );
         }
     });
 }
@@ -185,14 +203,17 @@ fn rmw_large(b: &mut Bencher, capacity: usize, mod_factor: f32) {
     let raw_store = Rc::new(RefCell::new(RawStore::new(path)));
     let mut hash_index: HashIndex<u64, LargeStruct> =
         HashIndex::new(capacity, mod_factor, raw_store.clone());
-    for i in 0..INSERT_COUNT {
+    for i in 0..TOTAL_KEYS {
         hash_index.put(i, LargeStruct::new());
     }
     b.iter(|| {
         for i in RANDOM_INDEXES.iter() {
-            hash_index.rmw(&i, |val| {
-                val.x2 += 10;
-            });
+            assert_eq!(
+                hash_index.rmw(&i, |val| {
+                    val.x2 += 10;
+                }),
+                true
+            );
         }
     });
 }
@@ -201,7 +222,7 @@ fn rmw_raw_store_small(b: &mut Bencher) {
     let temp_dir = tempdir().unwrap();
     let path = temp_dir.path().to_str().unwrap();
     let mut raw_store = RawStore::new(path);
-    for i in 0..INSERT_COUNT {
+    for i in 0..TOTAL_KEYS {
         let _ = raw_store.put(&i, &SmallStruct::new());
     }
     b.iter(|| {
@@ -209,7 +230,7 @@ fn rmw_raw_store_small(b: &mut Bencher) {
             let val: Option<SmallStruct> = raw_store.get(i).unwrap();
             let mut new_val = val.unwrap();
             new_val.x2 = new_val.x2 + 10;
-            let _ = raw_store.put(i, &new_val);
+            assert_eq!(raw_store.put(i, &new_val).is_ok(), true);
         }
     });
 }
@@ -218,7 +239,7 @@ fn rmw_raw_store_large(b: &mut Bencher) {
     let temp_dir = tempdir().unwrap();
     let path = temp_dir.path().to_str().unwrap();
     let mut raw_store = RawStore::new(path);
-    for i in 0..INSERT_COUNT {
+    for i in 0..TOTAL_KEYS {
         let _ = raw_store.put(&i, &LargeStruct::new());
     }
     b.iter(|| {
@@ -226,7 +247,69 @@ fn rmw_raw_store_large(b: &mut Bencher) {
             let val: Option<LargeStruct> = raw_store.get(i).unwrap();
             let mut new_val = val.unwrap();
             new_val.x2 = new_val.x2 + 10;
-            let _ = raw_store.put(i, &new_val);
+            assert_eq!(raw_store.put(i, &new_val).is_ok(), true);
+        }
+    });
+}
+
+fn random_get_small(b: &mut Bencher, capacity: usize, mod_factor: f32) {
+    let temp_dir = tempdir().unwrap();
+    let path = temp_dir.path().to_str().unwrap();
+    let raw_store = Rc::new(RefCell::new(RawStore::new(path)));
+    let mut hash_index: HashIndex<u64, SmallStruct> =
+        HashIndex::new(capacity, mod_factor, raw_store.clone());
+    for i in 0..TOTAL_KEYS {
+        hash_index.put(i, SmallStruct::new());
+    }
+    b.iter(|| {
+        for i in RANDOM_INDEXES.iter() {
+            assert_eq!(hash_index.get(&i).is_some(), true);
+        }
+    });
+}
+
+fn random_get_large(b: &mut Bencher, capacity: usize, mod_factor: f32) {
+    let temp_dir = tempdir().unwrap();
+    let path = temp_dir.path().to_str().unwrap();
+    let raw_store = Rc::new(RefCell::new(RawStore::new(path)));
+    let mut hash_index: HashIndex<u64, LargeStruct> =
+        HashIndex::new(capacity, mod_factor, raw_store.clone());
+    for i in 0..TOTAL_KEYS {
+        hash_index.put(i, LargeStruct::new());
+    }
+    b.iter(|| {
+        for i in RANDOM_INDEXES.iter() {
+            assert_eq!(hash_index.get(&i).is_some(), true);
+        }
+    });
+}
+
+fn raw_store_random_small_get(b: &mut Bencher) {
+    let temp_dir = tempdir().unwrap();
+    let path = temp_dir.path().to_str().unwrap();
+    let mut raw_store = RawStore::new(path);
+    for i in 0..TOTAL_KEYS {
+        let _ = raw_store.put(&i, &SmallStruct::new());
+    }
+    b.iter(|| {
+        for i in RANDOM_INDEXES.iter() {
+            let data: Option<SmallStruct> = raw_store.get(i).unwrap();
+            assert_eq!(data.is_some(), true);
+        }
+    });
+}
+
+fn raw_store_random_large_get(b: &mut Bencher) {
+    let temp_dir = tempdir().unwrap();
+    let path = temp_dir.path().to_str().unwrap();
+    let mut raw_store = RawStore::new(path);
+    for i in 0..TOTAL_KEYS {
+        let _ = raw_store.put(&i, &LargeStruct::new());
+    }
+    b.iter(|| {
+        for i in RANDOM_INDEXES.iter() {
+            let data: Option<LargeStruct> = raw_store.get(i).unwrap();
+            assert_eq!(data.is_some(), true);
         }
     });
 }

@@ -9,6 +9,7 @@ use std::hash::{BuildHasher, Hash, Hasher};
 
 use crate::data::{Key, Value};
 use crate::error::*;
+use crate::hint::unlikely;
 use crate::index::{HashOps, IndexOps, WriteMode};
 
 cfg_if::cfg_if! {
@@ -126,7 +127,7 @@ where
                 Some(std::mem::replace(&mut item.as_mut().1, v))
             } else {
                 // If we are above the modification threshold, then
-                // move an RawTable entry to the RawStore.
+                // move a modified entry to the RawStore.
                 if table.above_mod_threshold() {
                     let bucket = table.evict_mod_bucket(hash);
                     let &(ref key, ref value) = bucket.as_ref();
@@ -273,10 +274,26 @@ where
         F: FnMut(&mut V),
     {
         if let Some(mut entry) = self.table_get_mut(key) {
+            // run the udf on the data
             f(&mut entry);
             if self.mode.is_cow() {
                 // TODO
             }
+
+            // as we have touched `key` through table_get_mut,
+            // check whether we are above the modifcation limit,
+            // and proceed to evict bucket if that is the case.
+            let table = self.raw_table_mut();
+            if unlikely(table.above_mod_threshold()) {
+                unsafe {
+                    let hash = make_hash(&self.hash_builder, &key);
+                    let bucket = table.evict_mod_bucket(hash);
+                    let &(ref key, ref value) = bucket.as_ref();
+                    // TODO: handle err?
+                    let _ = self.raw_store_put(key, value);
+                };
+            }
+
             // indicate that the operation was successful
             return true;
         }
@@ -320,7 +337,7 @@ mod tests {
             let key: u64 = i as u64;
             assert_eq!(hash_index.get(&key), Some(&key));
         }
-        hash_index.persist().unwrap();
-        raw_store.borrow_mut().checkpoint().unwrap();
+        assert_eq!(hash_index.persist().is_ok(), true);
+        assert_eq!(raw_store.borrow_mut().checkpoint().is_ok(), true);
     }
 }

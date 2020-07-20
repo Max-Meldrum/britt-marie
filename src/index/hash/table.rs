@@ -153,11 +153,9 @@ impl Iterator for ProbeSeq {
 
     #[inline]
     fn next(&mut self) -> Option<usize> {
-        // We should have found an empty bucket by now and ended the probe.
-        debug_assert!(
-            self.stride <= self.bucket_mask,
-            "Went past end of probe sequence"
-        );
+        if self.stride >= self.bucket_mask {
+            return None;
+        }
 
         let result = self.pos;
         self.stride += Group::WIDTH;
@@ -603,8 +601,8 @@ impl<T> RawTable<T> {
                 }
             }
         }
-
-        // probe_seq never returns.
+        // probe_seq does return but it should never reach this
+        // as there will always be an empty bucket available...
         unreachable!();
     }
 
@@ -652,8 +650,6 @@ impl<T> RawTable<T> {
                 }
             }
         }
-        // probe_seq never returns.
-        unreachable!();
     }
 
     /// Searches for a modified bucket to evict
@@ -704,8 +700,8 @@ impl<T> RawTable<T> {
                 let bucket = self.bucket(index);
 
                 if self.growth_left == 0 {
-                    // If there is no space left, then actually "erase" it.
-                    self.erase_by_index(index);
+                  // If there is no space left, then actually "erase" it.
+                  self.erase_by_index(index);
                 }
 
                 // Set bucket to safe
@@ -726,21 +722,17 @@ impl<T> RawTable<T> {
     #[inline]
     pub fn insert(&mut self, hash: u64, value: T) -> Bucket<T> {
         unsafe {
-            let mut index = self.find_insert_slot(hash);
-
-            let old_ctrl = *self.ctrl(index);
-            if unlikely(self.growth_left == 0 && special_is_empty(old_ctrl)) {
-                // Rather than regrowing the table, the modification factor
-                // ensures there are always safe buckets available. We can simply
-                // erase a SAFE index by setting its ctrl byte to EMPTY/DELETED.
+            if unlikely(self.growth_left == 0) {
                 self.clear_safe_bucket(hash);
-                index = self.find_insert_slot(hash);
             }
+
+            let index = self.find_insert_slot(hash);
+            let ctrl = *self.ctrl(index);
 
             let bucket = self.bucket(index);
             self.growth_left = self
                 .growth_left
-                .saturating_sub(special_is_empty(old_ctrl) as usize);
+                .saturating_sub(special_is_empty(ctrl) as usize);
             self.set_ctrl(index, h2(hash));
             self.set_meta(index, MODIFIED);
             bucket.write(value);
@@ -768,8 +760,6 @@ impl<T> RawTable<T> {
                         // If the meta was safe, then increase modification
                         // counter as we are setting the meta to MODIFIED_TOUCHED.
                         if is_safe(*self.meta(index)) {
-                            // TODO: This might put us above mod_limit?
-                            // Perhaps allow batched modification evictions?
                             self.mod_counter += 1;
                         }
 
@@ -777,14 +767,10 @@ impl<T> RawTable<T> {
                         return Some(bucket);
                     }
                 }
-                if likely(group.match_empty().any_bit_set()) {
-                    return None;
-                }
             }
-        }
 
-        // probe_seq never returns.
-        unreachable!();
+            return None;
+        }
     }
 
     /// Searches for an element in the table.
@@ -803,14 +789,9 @@ impl<T> RawTable<T> {
                         return Some(bucket);
                     }
                 }
-                if likely(group.match_empty().any_bit_set()) {
-                    return None;
-                }
             }
         }
-
-        // probe_seq never returns.
-        unreachable!();
+        return None;
     }
 
     /// Returns the number of elements the map can hold without reallocating.

@@ -36,6 +36,7 @@ impl BitMask {
     }
     /// Returns whether the `BitMask` has at least one set bit.
     #[inline]
+    #[allow(dead_code)]
     pub fn any_bit_set(self) -> bool {
         self.0 != 0
     }
